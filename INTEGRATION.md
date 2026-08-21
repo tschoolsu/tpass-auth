@@ -91,6 +91,7 @@
   "sub": "104857600293847561029",
   "email": "b11302042@tschool.tp.edu.tw",
   "name": "林大明",
+  "entryYear": 114,
   "permissions": {
     "form": { "read": true, "role": "admin" }
   },
@@ -112,6 +113,7 @@
   "sub": "104857600293847561029",
   "email": "b11302042@tschool.tp.edu.tw",
   "name": "林大明",
+  "entryYear": 114,
   "permissions": {
     "auth":    { "read": true,  "role": "admin" },
     "form":    { "read": true,  "role": "admin" },
@@ -133,6 +135,7 @@
 | `sub` | `string` | ✓ | 使用者唯一識別碼（來自 Google 的 `sub`，跨服務一致、可當主鍵） |
 | `email` | `string` | ✓ | 學校信箱，已通過 `email_verified` 與網域白名單 |
 | `name` | `string` | ✓ | 顯示名稱 |
+| `entryYear` | `number` | ✗ | 民國入學學年度（如 `114`）。**可能不存在**：老師／職務帳號沒有屆別，舊 token 也還沒有這個欄位。缺少時請 fallback 回信箱前三碼，見下方說明 |
 | `permissions` | `Record<string, PermissionEntry>` | ✓ | **權限本體**，見下方型別與 §3.4 |
 | `iss` | `string` | ✓ | 簽發者，必為 §2 的 issuer |
 | `aud` | `string` | ✓ | 受眾，必為 `tpass:<你的服務id>` |
@@ -156,6 +159,23 @@ interface PermissionEntry {
 > ⚠️ **解析安全預設值（務必實作）**：`permissions` 缺、或缺你要查的 serviceId 這把 key
 > （舊票、或非 overview 服務去查別的 serviceId）→ 一律當成 `{ read: true, role: "default" }`，
 > 不要因為缺資料就誤鎖使用者。參考實作：`tpass-portal/src/lib/tpass-auth.ts` 的 `permOf()`。
+
+> 📅 **`entryYear` 與年級**：年級不要自己從信箱算。信箱前三碼是入學學年度，但**休學復學的人
+> 信箱沿用、前綴不變**，直接推算會多算一級（休學兩年甚至算出高四而變成空值）。auth 的
+> `/admin` panel 可以對這種人設定屆別覆寫，結果就放在 `entryYear`。
+>
+> 解析規則（務必照做）：
+>
+> ```ts
+> const entry = typeof payload.entryYear === "number"
+>   ? payload.entryYear
+>   : parseEntryYearFromEmail(email);   // fallback：舊 token 沒有這個 claim
+> const academicYear = month >= 8 ? rocYear : rocYear - 1;   // 學年度 8 月跳新
+> const grade = entry === null ? null : academicYear - entry + 1;   // 取 1..3，其餘視為 null
+> ```
+>
+> **fallback 這條是必要的**，不是可有可無：token TTL 只有 45 分鐘，但 auth 升級後的那段
+> 轉場期，使用者手上的舊 token 還沒有這個 claim。少了 fallback，那段時間全部人的年級會變空白。
 
 ### 3.4 權限模型
 

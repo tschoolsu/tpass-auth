@@ -128,14 +128,18 @@ export async function signServiceToken(
   const permissions: PermissionMap = isOverview
     ? await overviewFor(identity.email)
     : { [serviceId]: await permissionsFor(identity.email, serviceId) };
-  // 屆別：DB 覆寫優先，沒有就照 email 推。這是一次額外的 Subject 查詢
-  // （permissionsFor 查的是 Grant 表，沒有碰 Subject），email 有 unique index，
-  // 成本可接受——換掉的是「每個服務各自維護一份休學復學名單」。
-  const subject = await findSubjectByEmail(identity.email);
-  const entryYear = effectiveEntryYear(
-    identity.email,
-    subject?.entryYearOverride ?? null,
-  );
+  // 屆別：DB 覆寫優先，沒有就照 email 推。
+  // fail-open：這個查詢失敗不該讓整個發證流程掛掉——permissionsFor 與 getSession
+  // 面對 DB 故障都是降級處理，簽章路徑不能為了一個顯示用欄位就變成硬依賴 DB。
+  // 查不到就當作沒有覆寫、照 email 推：語意等同舊 token，消費端本來就會 fallback。
+  let entryYearOverride: number | null = null;
+  try {
+    const subject = await findSubjectByEmail(identity.email);
+    entryYearOverride = subject?.entryYearOverride ?? null;
+  } catch (err) {
+    console.error(`[session] entryYearOverride 查詢失敗，降級為照 email 推算（fail-open）：`, err);
+  }
+  const entryYear = effectiveEntryYear(identity.email, entryYearOverride);
   return sign(
     { ...identity, permissions, entryYear },
     serviceAudience(serviceId),

@@ -164,6 +164,17 @@ export function touchSessionsValidFrom(subjectId: string): Promise<Subject> {
   });
 }
 
+// 設定／清除入學屆別覆寫。null＝恢復成照 email 推算。
+export function setEntryYearOverride(
+  subjectId: string,
+  value: number | null,
+): Promise<Subject> {
+  return prisma.subject.update({
+    where: { id: subjectId },
+    data: { entryYearOverride: value },
+  });
+}
+
 export function findGrantByServiceAndSubject(
   subjectId: string,
   serviceId: string,

@@ -12,6 +12,7 @@ import { authConfig } from "@/config/auth";
 import { permissionsFor, overviewFor } from "@/lib/permissions/resolve";
 import { findSubjectByEmail } from "@/lib/permissions/repo";
 import type { PermissionMap } from "@/lib/permissions/types";
+import { effectiveEntryYear } from "@/lib/entry-year";
 
 // T-Pass 對接合約：簽進 JWT 的身分內容。
 // permissions：Phase 4 新 claim，role+restriction 雙欄本體（見 lib/permissions/types.ts），
@@ -22,6 +23,9 @@ export interface TPassClaims {
   email: string;
   name: string;
   permissions: PermissionMap;
+  // 民國入學學年度。只在 per-service token 出現，且只在算得出來時出現
+  // （老師／職務帳號沒有屆別 → 整個 claim 省略）。消費端據此算年級。
+  entryYear?: number | null;
   iat: number;
   exp: number;
 }
@@ -83,11 +87,14 @@ async function sign(
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const privateKey = await getPrivateKey();
-  return new SignJWT({
+  const payload: Record<string, unknown> = {
     email: claims.email,
     name: claims.name,
     permissions: claims.permissions,
-  })
+  };
+  // 算不出屆別（老師／職務帳號）就整個省略，不要塞 null 進 payload。
+  if (typeof claims.entryYear === "number") payload.entryYear = claims.entryYear;
+  return new SignJWT(payload)
     .setProtectedHeader({ alg: "EdDSA", kid: authConfig.jwt.signingKid })
     .setSubject(claims.sub)
     .setIssuer(authConfig.jwt.issuer)
@@ -121,8 +128,15 @@ export async function signServiceToken(
   const permissions: PermissionMap = isOverview
     ? await overviewFor(identity.email)
     : { [serviceId]: await permissionsFor(identity.email, serviceId) };
+  // 屆別：DB 覆寫優先，沒有就照 email 推。這裡本來就會查 DB 拿 permissions，
+  // 多讀一個欄位不增加查詢次數。
+  const subject = await findSubjectByEmail(identity.email);
+  const entryYear = effectiveEntryYear(
+    identity.email,
+    subject?.entryYearOverride ?? null,
+  );
   return sign(
-    { ...identity, permissions },
+    { ...identity, permissions, entryYear },
     serviceAudience(serviceId),
     authConfig.jwt.ttlSeconds,
   );
@@ -158,6 +172,7 @@ export async function verifySession(
       email: payload.email as string,
       name: payload.name as string,
       permissions: (payload.permissions as PermissionMap | undefined) ?? {},
+      entryYear: typeof payload.entryYear === "number" ? payload.entryYear : null,
       iat: payload.iat as number,
       exp: payload.exp as number,
     };

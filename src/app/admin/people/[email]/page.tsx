@@ -9,6 +9,8 @@ import { toEntry } from "@/lib/permissions/resolve";
 import { Card, Badge } from "@/components/admin/primitives";
 import { GrantRow, ROLE_RANK } from "./GrantRow";
 import { DangerZone } from "./DangerZone";
+import { EntryYearCard } from "./EntryYearCard";
+import { parseEntryYearFromEmail, currentAcademicYear } from "@/lib/entry-year";
 import type { Restriction, Role } from "@/lib/permissions/types";
 
 export default async function PersonPage({
@@ -48,6 +50,16 @@ export default async function PersonPage({
           </p>
         )}
       </div>
+
+      {!isSuperadmin && (
+        <EntryYearCard
+          email={email}
+          initialOverride={subject?.entryYearOverride ?? null}
+          derivedFromEmail={parseEntryYearFromEmail(email)}
+          academicYear={currentAcademicYear()}
+          ttlSeconds={authConfig.jwt.ttlSeconds}
+        />
+      )}
 
       {isSuperadmin ? (
         <Card>

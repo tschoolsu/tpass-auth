@@ -46,6 +46,8 @@ export function EntryYearCard({
         setError(result.error);
         return;
       }
+      // 清除成功才清空輸入框——失敗時保留原值，避免畫面與 DB 不一致。
+      if (entryYear === null) setValue("");
       setEffectiveAt(Math.floor(Date.now() / 1000) + ttlSeconds);
       router.refresh();
     });
@@ -66,7 +68,6 @@ export function EntryYearCard({
   }
 
   function onClear() {
-    setValue("");
     submit(null);
   }
 

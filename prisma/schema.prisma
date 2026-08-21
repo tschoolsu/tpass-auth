@@ -15,6 +15,7 @@ model Subject {
   email             String    @unique // 一律小寫正規化；主要查找鍵
   sub               String?   @unique // Google sub，首次登入時回填
   name              String?
+  entryYearOverride Int?      // 民國入學學年度覆寫（休學復學等例外）；null = 照 email 前三碼推
   sessionsValidFrom DateTime? // ban 時寫入：早於此 iat 的 auth session 一律無效（Phase 3 使用，先進 schema）
   lastSeenAt        DateTime?
   createdAt         DateTime  @default(now())

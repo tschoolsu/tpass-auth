@@ -18,6 +18,7 @@ import {
   findGrantByServiceAndSubject,
   upsertGrant,
   touchSessionsValidFrom,
+  setEntryYearOverride,
   findSubjectsByEmails,
   createSubjectsIfMissing,
   findGrantsBySubjectIds,
@@ -32,6 +33,7 @@ import {
   MAX_EMAILS,
 } from "@/lib/permissions/parse-emails";
 import type { Restriction, Role } from "@/lib/permissions/types";
+import { isValidEntryYear, MIN_ENTRY_YEAR, currentAcademicYear } from "@/lib/entry-year";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -239,6 +241,60 @@ export async function saveGrant(input: SaveGrantInput): Promise<ActionResult> {
   revalidatePath("/admin/audit");
   revalidatePath("/admin");
 
+  return { ok: true };
+}
+
+// ── saveEntryYear ────────────────────────────────────────────────────
+// 入學屆別覆寫。休學復學者 email 沿用、學號前綴不變，年級會多算一級（休學兩年直接算不出來），
+// 這裡讓管理者把他改算到正確的一屆。存屆別不存年級——設定一次就永久正確，
+// 不必每年 8 月把所有例外重標一輪。
+// 版主可用：這是身分資料的更正，不是授權變更。
+export interface SaveEntryYearInput {
+  email: string;
+  entryYear: number | null; // null = 恢復成照 email 推算
+}
+
+export async function saveEntryYear(input: SaveEntryYearInput): Promise<ActionResult> {
+  const g = await gate(requireAuthModerator);
+  if ("error" in g) return { ok: false, error: g.error };
+  const { session } = g.actor;
+
+  const email = normalizeEmail(input.email);
+  if (!isValidEmail(email)) return { ok: false, error: "email 格式不正確" };
+
+  // 與 saveGrant 同一條規則：總管不進 DB，改了也沒有意義。
+  if (authConfig.superadmins.includes(email)) {
+    return { ok: false, error: "此帳號是生態總管（AUTH_SUPERADMINS），不可調整" };
+  }
+
+  if (input.entryYear !== null && !isValidEntryYear(input.entryYear)) {
+    return {
+      ok: false,
+      error: `入學學年度必須是 ${MIN_ENTRY_YEAR}～${currentAcademicYear() + 1} 之間的民國學年度`,
+    };
+  }
+
+  // 沿用 saveGrant 的做法：沒建過就順手建，不要把「row 存不存在」推給人先處理。
+  const subject = (await findSubjectByEmail(email)) ?? (await createSubjectRow(email));
+  const before = { entryYearOverride: subject.entryYearOverride };
+
+  if (subject.entryYearOverride === input.entryYear) {
+    return { ok: true }; // 沒變動就不寫、不記稽核，避免假紀錄
+  }
+
+  await setEntryYearOverride(subject.id, input.entryYear);
+
+  await recordAudit({
+    actorEmail: session.email,
+    targetEmail: email,
+    serviceId: "auth",
+    action: input.entryYear === null ? "entryYear.clear" : "entryYear.set",
+    before,
+    after: { entryYearOverride: input.entryYear },
+  });
+
+  revalidatePath(`/admin/people/${encodeURIComponent(email)}`);
+  revalidatePath("/admin/audit");
   return { ok: true };
 }
 

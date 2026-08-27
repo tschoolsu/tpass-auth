@@ -1,0 +1,104 @@
+# PR 檢查。做的事就是 `scripts/tpass check`（lint + tsc）再加上 build，
+# 只是換一個地方跑：換成一台什麼都沒有的全新機器。
+#
+# 為什麼要有這個：main 沒有任何守門員，而組織裡有四個帳號推得動它。
+# 部員交 v1、由部長與 Ray 接手驗收與維護——這條 workflow 是給接手的人用的：
+# 不必把別人交來的 code clone 下來，就先知道它 lint / 型別 / build 過不過。
+#
+# ⚠️ 這個檔案是自給自足的樣板。要給第八個服務加 CI，整份複製過去，
+#    只改下面 env: 區塊裡的值（＋沒有 Prisma / 沒有測試就刪掉對應那一行）。
+name: ci
+
+on:
+  # PR 一開、每次再推 commit 都跑。
+  pull_request:
+  # 目前沒有開分支保護，直推 main 是常態——所以 main 這條不是保險絲而是主力：
+  # 推壞的人 40 秒後會收到 GitHub 的失敗信，commit 列表上掛一個紅叉。
+  push:
+    branches: [main]
+
+# 同一個 PR / 分支連推三次，前兩次直接取消，只留最新那次。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 最小權限：只讀自己的原始碼。預設是讀寫，明寫成唯讀＝workflow 被改壞也偷不走東西。
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # build 期間會 import src/config/*.ts，那裡的 REQUIRED 檢查缺 env 就直接 throw。
+    # 所以 CI 需要一份「形狀正確但完全是假的」env。
+    #
+    # 🔒 這裡永遠不放真值。repo 是 public，這個檔案任何人都看得到；
+    # CI 不連任何真實資料庫、不打真的 auth——它只是編譯。
+    # 網域一律用 .invalid（RFC 2606 保證這個 TLD 永遠解析不出來）：
+    # 萬一有人寫出「build 時就去 fetch」的 code，它會當場爆炸，而不是安靜地打到正式站。
+    env:
+      GOOGLE_CLIENT_ID: ci-not-a-real-client-id
+      GOOGLE_CLIENT_SECRET: ci-not-a-real-secret
+      AUTH_BASE_URL: https://ci.invalid
+      AUTH_ALLOWED_HOST_SUFFIX: ci.invalid
+      AUTH_ALLOWED_EMAIL_DOMAIN: ci.invalid
+      PORTAL_URL: https://ci.invalid
+      JWT_ISSUER: https://ci.invalid
+      JWT_TTL_SECONDS: "2700"
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      AUTH_SUPERADMINS: ci@ci.invalid
+      # 金鑰是 lazy import 的（session.ts 的 ??=），build 期不會被解析，
+      # 所以這裡放兩個字串就夠——public repo 裡連假的 PEM 都不必出現。
+      JWT_PRIVATE_KEY: ci-not-a-real-key
+      JWT_PUBLIC_KEY: ci-not-a-real-key
+
+    steps:
+      # action 版本釘在現行大版本。GitHub 會把 node20 時代的 action 強制跑在 node24
+      # 上並掛警告，一路釘最新就不會累積這種待爆的技術債。
+      - uses: actions/checkout@v7
+
+      # 服務註冊表是另一個 public repo，而且是在 build 期就被讀進去的
+      # （lib/registry.ts 在模組載入時就 load()）。沒有它 build 直接失敗。
+      # clone 到 workspace 外面的暫存區，不放進專案目錄——免得 eslint / tsc /
+      # Turbopack 把它當成這個專案的一部分。路徑用 $GITHUB_ENV 傳給後面的步驟
+      # （$RUNNER_TEMP 在 job 層的 env: 區塊裡讀不到，只有步驟裡讀得到）。
+      # 這跟 deploy.sh 在主機上注入絕對路徑是同一招，理由也一樣：
+      # 主機/runner 上沒有「並排 clone」那個佈局。
+      - name: 取得服務註冊表
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/tschoolsu/tpass-registry.git "${RUNNER_TEMP}/tpass-registry"
+          echo "TPASS_REGISTRY_PATH=${RUNNER_TEMP}/tpass-registry/services.json" >> "${GITHUB_ENV}"
+
+      # 順序有意義：pnpm 要先裝好，下一步的 cache: pnpm 才找得到它來算快取路徑。
+      # 版本不寫在這裡——action 會讀 package.json 的 packageManager 欄位，
+      # 跟本機、主機是同一個真相來源。
+      - uses: pnpm/action-setup@v6
+
+      # 22 是刻意的：主機跑的就是 node v22。CI 綠了但主機炸掉是最沒有價值的綠燈。
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      # --frozen-lockfile：鎖檔跟 package.json 對不上就直接失敗，不會自作主張改鎖檔。
+      # CI 要重現的是「這個 commit 當時的依賴」，不是「今天裝起來會變成什麼」。
+      # deploy.sh 上線時用的也是同一個旗標。
+      - run: pnpm install --frozen-lockfile
+
+      # Prisma client 是生成物，不進 git，也沒有 postinstall 會帶到
+      # （deploy.sh 有同樣的註解與同樣的順序）。少這一步，tsc 拿不到 model 型別。
+      - run: pnpm exec prisma generate
+
+      # Next 16 把 route 的型別（RouteContext…）生成在 .next/types/ 底下。
+      # 全新 clone 沒有 .next，所以 tsc 會噴 Cannot find name 'RouteContext'——
+      # 本機不會發生，因為你的 .next 一直都在。typegen 只生型別，不做完整 build。
+      - run: pnpm exec next typegen
+
+      # 由快到慢排：lint 幾秒、tsc 十幾秒、build 最久。錯越早出現，等紅燈的時間越短。
+      - run: pnpm lint
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test
+      - run: pnpm run build

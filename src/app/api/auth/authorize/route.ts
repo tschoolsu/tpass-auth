@@ -22,7 +22,21 @@ export async function GET(request: NextRequest) {
   // 這三道檢查失敗時，撞到的一定是**人**（authorize 是瀏覽器頂層導航），
   // 所以導去 on-brand 的說明頁而不是回裸文字——原本使用者只看得到白底一行英文。
   // reason 只帶固定代號，不回吐使用者送進來的值（避免把反射內容塞進頁面）。
+  //
+  // 排錯指示走 log、不走畫面（B4）：撞到這一頁的是學生，需要指示的是串接的部員。
+  const FIX_HINT: Record<string, string> = {
+    "unknown-service":
+      "把這個服務 id 登記進 tpass-registry 的 services.json（開 PR），merge 後重新部署 auth 即生效。",
+    "invalid-redirect":
+      "redirect_uri 必須位於 AUTH_ALLOWED_HOST_SUFFIX 的網域底下（scheme 與 port 也要對）。",
+    "invalid-next": "next 必須是以單一斜線開頭的站內路徑，例如 /dashboard。",
+  };
   const reject = (reason: string) => {
+    console.warn(
+      `[authorize] 擋下一次授權請求：${reason}\n` +
+        `  service=${serviceId} redirect_uri=${redirectUri} next=${next}\n` +
+        `  串接者：${FIX_HINT[reason] || "檢查 authorize 的 service / redirect_uri / next 三個參數。"}`,
+    );
     const url = new URL("/service-error", authConfig.baseUrl);
     url.searchParams.set("reason", reason);
     return NextResponse.redirect(url);

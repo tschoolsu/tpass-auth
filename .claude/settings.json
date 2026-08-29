@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "tpass-skills": {
+      "source": {
+        "source": "github",
+        "repo": "tschoolsu/tpass-skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "tpass@tpass-skills": true
+  }
+}

@@ -42,4 +42,5 @@ yarn-error.log*
 next-env.d.ts
 
 # Claude Code 的本機工作區（含 agent worktree），不進版控
-.claude/
+.claude/*
+!.claude/settings.json

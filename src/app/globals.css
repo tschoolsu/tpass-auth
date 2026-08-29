@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tpass-ui/theme.css";
 
 /* 與 tpass-portal 設計系統一致：light-only Neobrutalism、OKLCH。 */
 /* auth 的登入/錯誤頁是使用者可能看到的少數 tauth 畫面，統一在此維護 on-brand。 */
@@ -6,37 +7,9 @@
   /* design.md 指定的順序：Plus Jakarta Sans → Geist Sans fallback。
      用 next/font 產生的 CSS 變數引用，而不是字面 "Plus Jakarta Sans"（其他 repo 的寫法）——
      兩者目前都能運作，但字面名能中的前提是 next/font 剛好沒有改寫 @font-face 的家族名，
-     那是實作細節不是契約；variable 才是它文件上給的引用方式。 */
+     那是實作細節不是契約；variable 才是它文件上給的引用方式。
+     其餘 token 來自 tpass-ui/theme.css。 */
   --font-sans: var(--font-plus-jakarta-sans), var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-
-  --color-background:          oklch(0.99 0.002 250);
-  --color-foreground:          oklch(0.21 0.01  264);
-  --color-card:                oklch(1    0     0  );
-  --color-primary:             oklch(0.62 0.16  150);
-  --color-primary-foreground:  oklch(0.99 0     0  );
-  --color-accent:              oklch(0.6  0.16  250);
-  --color-muted:               oklch(0.96 0.004 250);
-  --color-muted-foreground:    oklch(0.5  0.012 264);
-  --color-destructive:         oklch(0.58 0.2   25 );
-  --color-border:              oklch(0.21 0.01  264);
-  --color-ring:                oklch(0.62 0.16  150);
-
-  --color-tone-green-bg:       oklch(0.96 0.05  150);
-  --color-tone-green-badge:    oklch(0.88 0.11  150);
-  --color-tone-green-text:     oklch(0.45 0.13  150);
-  --color-tone-blue-bg:        oklch(0.96 0.04  250);
-  --color-tone-blue-badge:     oklch(0.88 0.09  250);
-  --color-tone-blue-text:      oklch(0.46 0.15  250);
-  --color-tone-orange-bg:      oklch(0.96 0.05   60);
-  --color-tone-orange-badge:   oklch(0.88 0.11   60);
-  --color-tone-orange-text:    oklch(0.5  0.15   45);
-  --color-tone-violet-bg:      oklch(0.96 0.04  300);
-  --color-tone-violet-badge:   oklch(0.88 0.09  300);
-  --color-tone-violet-text:    oklch(0.48 0.16  300);
-  --color-tone-rose-bg:        oklch(0.96 0.04  15);
-  --color-tone-rose-badge:     oklch(0.89 0.09  15);
-  --color-tone-rose-text:      oklch(0.5  0.17  18);
 }
 
 :root {

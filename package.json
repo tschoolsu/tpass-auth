@@ -36,7 +36,8 @@
     "next": "16.3.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "tpass-ui": "github:tschoolsu/tpass-ui#v1.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

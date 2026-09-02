@@ -1,23 +1,23 @@
-#!/usr/bin/env node
 // 一次性灌資料：把 AUTH_GROUPS（env JSON）搬進 DB（Subject + Grant）。
 // 冪等——用 upsert，重跑不重複、不覆蓋別人手動在 panel 調過的 role/restriction。
 // Phase 7（2026-07-27）：groups claim 已從程式碼全面移除，本腳本是唯一還讀 AUTH_GROUPS 的地方，
 // 只為正式站一次性遷移保留（直接讀 process.env，不 import src/config/auth.ts，兩者已解耦）。
 // 正式站 seed 完成後即可從主機 .env 刪除 AUTH_GROUPS，屆時本腳本亦可一併刪除。
-import pkg from "@next/env";
-import { PrismaClient } from "@prisma/client";
-
-const { loadEnvConfig } = pkg;
+import { loadEnvConfig } from "@next/env";
+import { PrismaClient } from "../src/generated/prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // 腳本不經 Next 路由，process.env 不會自動載入 .env / .env.local；明確載入。
 loadEnvConfig(process.cwd());
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
-function parseGroups(raw) {
+type GroupMap = Record<string, Record<string, string[]>>;
+
+function parseGroups(raw: string | undefined): GroupMap {
   if (!raw || !raw.trim()) return {};
-  const parsed = JSON.parse(raw);
-  const out = {};
+  const parsed = JSON.parse(raw) as GroupMap;
+  const out: GroupMap = {};
   for (const [email, perService] of Object.entries(parsed)) {
     out[email.toLowerCase()] = perService;
   }
@@ -25,7 +25,7 @@ function parseGroups(raw) {
 }
 
 // AUTH_GROUPS 語意：super-admin ∈ groups → role admin；否則 admin ∈ groups → role moderator。
-function roleFromGroups(groups) {
+function roleFromGroups(groups: string[]) {
   if (groups.includes("super-admin")) return "admin";
   if (groups.includes("admin")) return "moderator";
   return "default";

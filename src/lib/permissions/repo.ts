@@ -2,7 +2,7 @@
 // email 一律小寫正規化——Subject.email 存的也是小寫，查找鍵才對得上。
 import "server-only";
 import { prisma } from "@/lib/db";
-import type { Grant, Prisma, Subject } from "@prisma/client";
+import type { Grant, Prisma, Subject } from "@/generated/prisma/client";
 
 export function findGrant(email: string, serviceId: string): Promise<Grant | null> {
   return prisma.grant.findFirst({

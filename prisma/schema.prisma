@@ -2,12 +2,12 @@
 // Grant 是「誰在哪個服務屬於什麼角色／被什麼管制」，AuditLog 是「誰動了誰的權限」。
 // 不建 Service 表——服務清單真相是 authConfig.serviceIds（讀 services.json 派生的 env）。
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model Subject {

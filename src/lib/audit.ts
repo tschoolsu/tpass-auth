@@ -2,7 +2,7 @@
 // 一張表一次 insert 是最便宜的保險。
 import "server-only";
 import { prisma } from "@/lib/db";
-import type { Prisma } from "@prisma/client";
+import type { Prisma } from "@/generated/prisma/client";
 
 export interface RecordAuditInput {
   actorEmail: string;

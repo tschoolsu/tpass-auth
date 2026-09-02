@@ -3,15 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.27.0",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@prisma/client",
-      "@prisma/engines",
-      "prisma",
-      "sharp",
-      "unrs-resolver"
-    ]
-  },
   "scripts": {
     "dev": "next dev --experimental-https --experimental-https-key $HOME/tpass-certs/key.pem --experimental-https-cert $HOME/tpass-certs/cert.pem -H auth.lvh.me -p 3000",
     "build": "next build",

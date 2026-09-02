@@ -1,0 +1,8 @@
+# pnpm 10 從 package.json 的 "pnpm" 欄位搬來（10.27 起不再讀那裡）。
+# 只有列在這裡的套件才准跑 postinstall／build script。
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - "prisma"
+  - "sharp"
+  - "unrs-resolver"

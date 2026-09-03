@@ -18,6 +18,8 @@
 
 # next.js
 /.next/
+# pm2-start.sh 在 build 失敗時用來回滾的上一版 build
+/.next.prev/
 /out/
 
 # production

@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { UserPlus } from "lucide-react";
 import { authConfig } from "@/config/auth";
-import { viewerIsAuthAdmin } from "@/lib/admin-guard";
+import { viewerIsAuthAdmin, canViewPanel } from "@/lib/admin-guard";
 import { listGrantsForService } from "@/lib/permissions/repo";
 import { toEntry } from "@/lib/permissions/resolve";
 import { formatDateTime } from "@/lib/format-time";
@@ -18,6 +18,10 @@ export default async function ServicePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  // 守門要在任何查詢之前：layout 的 Forbidden 只擋畫面，擋不住這支函式繼續跑，
+  // 查到的東西會進 RSC payload 送給瀏覽器（見 lib/admin-guard.ts 的說明）。
+  if (!(await canViewPanel())) return null;
+
   const { id } = await params;
   if (!isValidServiceId(id)) notFound();
 

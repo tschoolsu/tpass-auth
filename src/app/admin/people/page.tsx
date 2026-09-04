@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { UserPlus, Search } from "lucide-react";
 import { authConfig } from "@/config/auth";
-import { viewerIsAuthAdmin } from "@/lib/admin-guard";
+import { viewerIsAuthAdmin, canViewPanel } from "@/lib/admin-guard";
 import { listSubjects, type SubjectStatusFilter } from "@/lib/permissions/repo";
 import { Card, Input, Select, Button, LinkButton, Label } from "@/components/admin/primitives";
 import { PermBadge } from "@/components/admin/PermBadge";
@@ -28,6 +28,10 @@ export default async function PeoplePage({
 }: {
   searchParams: Promise<{ q?: string; service?: string; status?: string; page?: string }>;
 }) {
+  // 守門要在任何查詢之前：layout 的 Forbidden 只擋畫面，擋不住這支函式繼續跑，
+  // 查到的東西會進 RSC payload 送給瀏覽器（見 lib/admin-guard.ts 的說明）。
+  if (!(await canViewPanel())) return null;
+
   const { q, service, status: statusRaw, page: pageRaw } = await searchParams;
   const page = Math.max(1, Number(pageRaw) || 1);
   const serviceIds = [...new Set([...authConfig.serviceIds, "auth"])];

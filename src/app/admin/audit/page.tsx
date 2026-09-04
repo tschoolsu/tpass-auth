@@ -7,6 +7,7 @@ import { listAuditLogs } from "@/lib/permissions/repo";
 import { describeAudit } from "@/lib/audit-describe";
 import { formatDateTime } from "@/lib/format-time";
 import { Card, Input, Select, Button, LinkButton, Label } from "@/components/admin/primitives";
+import { canViewPanel } from "@/lib/admin-guard";
 
 const PAGE_SIZE = 30;
 
@@ -39,6 +40,10 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<{ targetEmail?: string; serviceId?: string; page?: string }>;
 }) {
+  // 守門要在任何查詢之前：layout 的 Forbidden 只擋畫面，擋不住這支函式繼續跑，
+  // 查到的東西會進 RSC payload 送給瀏覽器（見 lib/admin-guard.ts 的說明）。
+  if (!(await canViewPanel())) return null;
+
   const { targetEmail, serviceId, page: pageRaw } = await searchParams;
   const page = Math.max(1, Number(pageRaw) || 1);
   const serviceIds = [...new Set([...authConfig.serviceIds, "auth"])];

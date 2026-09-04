@@ -2,17 +2,24 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { generateState, generateCodeVerifier } from "arctic";
 import { authConfig } from "@/config/auth";
-import { google, isAllowedRedirect, OAUTH_COOKIES } from "@/lib/oauth";
+import {
+  google,
+  isAllowedRedirect,
+  encodeFlow,
+  flowCookieName,
+  flowsToEvict,
+  OAUTH_FLOW_TTL_SECONDS,
+} from "@/lib/oauth";
 
 export const runtime = "nodejs";
 
-// 短效暫存 cookie：HttpOnly + SameSite=Lax + 10 分鐘。
+// 短效暫存 cookie：HttpOnly + SameSite=Lax。
 // 必 Lax 不可 Strict——Strict 時從 Google 跳回瀏覽器不會帶這些 cookie，登入會壞。
 const tempCookieOptions = {
   httpOnly: true,
   sameSite: "lax" as const,
   path: "/",
-  maxAge: 600,
+  maxAge: OAUTH_FLOW_TTL_SECONDS,
   secure: authConfig.cookieSecure,
 };
 
@@ -37,8 +44,19 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set("hd", authConfig.allowedEmailDomain);
 
   const response = NextResponse.redirect(authUrl);
-  response.cookies.set(OAUTH_COOKIES.state, state, tempCookieOptions);
-  response.cookies.set(OAUTH_COOKIES.verifier, codeVerifier, tempCookieOptions);
-  response.cookies.set(OAUTH_COOKIES.redirect, redirectUri, tempCookieOptions);
+
+  // 一條流程一顆 cookie（名稱帶 state），多個分頁同時登入才不會互相蓋掉——
+  // 這正是「Invalid OAuth state」黑畫面的成因，見 lib/oauth.ts 的說明。
+  response.cookies.set(
+    flowCookieName(state),
+    encodeFlow({ v: codeVerifier, r: redirectUri, t: Math.floor(Date.now() / 1000) }),
+    tempCookieOptions,
+  );
+
+  // 狂點登入不該把 cookie header 撐爆：超過上限就淘汰最舊的幾條。
+  for (const name of flowsToEvict(request.cookies.getAll())) {
+    response.cookies.delete(name);
+  }
+
   return response;
 }

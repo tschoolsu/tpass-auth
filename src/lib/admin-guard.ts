@@ -51,3 +51,22 @@ export async function viewerIsAuthAdmin(): Promise<boolean> {
   const perm = await getAuthPerm(session);
   return perm.role === "admin";
 }
+
+/**
+ * **每個 /admin 頁面的第一行都要呼叫這支，而且要在任何 DB 查詢之前。**
+ *
+ * layout 擋住的是「畫面」，不是「執行」——Next 會並行渲染 layout 與 page，
+ * layout 判斷沒權限而回傳 Forbidden 時，page 早就查完 DB，那些資料會跟著進
+ * RSC payload 送到瀏覽器，view-source 就看得到。曾經因此把全站的權限狀態與
+ * 稽核紀錄（含 actor／target email 與管制理由）送給任何一個登入使用者。
+ * tests/integration/admin-leak.test.ts 守著這件事。
+ *
+ * 沒權限時頁面回傳 null 即可：畫面本來就由 layout 的 Forbidden 負責。
+ */
+export async function canViewPanel(required: "moderator" | "admin" = "moderator"): Promise<boolean> {
+  const session = await getSession();
+  if (!session) return false;
+  const perm = await getAuthPerm(session);
+  if (required === "admin") return perm.role === "admin";
+  return perm.role === "admin" || perm.role === "moderator";
+}

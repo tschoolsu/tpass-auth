@@ -1,7 +1,7 @@
 // /admin/people/[email]：主力編輯頁。每個 serviceId 一列 role/restriction/reason/到期。
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { getAuthPerm } from "@/lib/admin-guard";
+import { getAuthPerm, canViewPanel } from "@/lib/admin-guard";
 import { authConfig } from "@/config/auth";
 import { findSubjectWithGrants } from "@/lib/permissions/repo";
 import { isValidEmail } from "@/lib/permissions/parse-emails";
@@ -18,6 +18,10 @@ export default async function PersonPage({
 }: {
   params: Promise<{ email: string }>;
 }) {
+  // 守門要在任何查詢之前：layout 的 Forbidden 只擋畫面，擋不住這支函式繼續跑，
+  // 查到的東西會進 RSC payload 送給瀏覽器（見 lib/admin-guard.ts 的說明）。
+  if (!(await canViewPanel())) return null;
+
   const { email: emailParam } = await params;
   const email = decodeURIComponent(emailParam).toLowerCase();
 

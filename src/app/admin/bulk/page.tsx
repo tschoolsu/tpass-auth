@@ -1,7 +1,7 @@
 // /admin/bulk：批次授權——貼一批 email、勾服務、選角色。
 // 存在的理由：學期初拿到一份幹部名單要一次給權限，逐人逐服務點是 200 次以上的互動。
 import { authConfig } from "@/config/auth";
-import { viewerIsAuthAdmin } from "@/lib/admin-guard";
+import { viewerIsAuthAdmin, canViewPanel } from "@/lib/admin-guard";
 import { Forbidden } from "@/components/admin/Forbidden";
 import { BulkGrantForm } from "./BulkGrantForm";
 
@@ -10,6 +10,10 @@ export default async function BulkPage({
 }: {
   searchParams: Promise<{ service?: string }>;
 }) {
+  // 守門要在任何查詢之前：layout 的 Forbidden 只擋畫面，擋不住這支函式繼續跑，
+  // 查到的東西會進 RSC payload 送給瀏覽器（見 lib/admin-guard.ts 的說明）。
+  if (!(await canViewPanel("admin"))) return null;
+
   // layout 只擋到版主，但批次改的是角色——版主本來就不能改角色。
   // 不擋在這裡的話，版主會看到一份填得完、按下去卻只會被 action 拒絕的表單。
   if (!(await viewerIsAuthAdmin())) {

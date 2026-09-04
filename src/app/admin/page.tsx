@@ -5,8 +5,13 @@ import { authConfig } from "@/config/auth";
 import { countSubjects, listRecentAuditLogs, roleStats, restrictionStats } from "@/lib/permissions/repo";
 import { formatDateTime } from "@/lib/format-time";
 import { Card, Input, Button } from "@/components/admin/primitives";
+import { canViewPanel } from "@/lib/admin-guard";
 
 export default async function AdminOverviewPage() {
+  // 守門要在任何查詢之前：layout 的 Forbidden 只擋畫面，擋不住這支函式繼續跑，
+  // 查到的東西會進 RSC payload 送給瀏覽器（見 lib/admin-guard.ts 的說明）。
+  if (!(await canViewPanel())) return null;
+
   const serviceIds = [...new Set([...authConfig.serviceIds, "auth"])];
 
   const [totalSubjects, roles, restrictions, recentAudit] = await Promise.all([

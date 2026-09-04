@@ -24,6 +24,12 @@ superadmin 短路與 fail-open 降級，繞過它們等於重新引入一次這�
 `src/lib/permissions/repo.ts` 的 CRUD 函式；但每支 action 仍須自己呼叫
 `requireAuthModerator()` / `requireAuthAdmin()`，不能只靠 layout 擋。
 
+**`/admin` 的每個 page 也一樣**：第一行必須是 `if (!(await canViewPanel())) return null;`，
+而且要在任何 DB 查詢之前。layout 擋的是「畫面」不是「執行」——Next 並行渲染 layout 與 page，
+layout 回 Forbidden 時 page 早就查完 DB，那些資料會跟著進 RSC payload 送到瀏覽器，
+view-source 就看得到。曾經因此把全站權限狀態與稽核紀錄（含 actor／target email 與管制理由）
+送給任何一個登入使用者。`tests/integration/admin-leak.test.ts` 守著這件事。
+
 ## auth 不是使用者的目的地（UI 設計說明）
 
 auth 只是發證服務，不是門戶。使用者理想上只會看到 **Google 自己的登入介面**，而不是 tauth 的頁面：

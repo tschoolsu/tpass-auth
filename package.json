@@ -10,6 +10,8 @@
     "start:https": "NODE_ENV=production node server.mjs",
     "lint": "eslint",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "stress": "vitest run --config vitest.stress.config.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "pnpm dlx tsx scripts/seed-from-env.ts",

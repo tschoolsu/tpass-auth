@@ -32,12 +32,17 @@ module.exports = {
       // 名稱＝服務註冊表的 id。deploy.sh 的 pm2 reload 依賴它，永不改名。
       name: "auth",
       cwd: __dirname,
-      // 不直接指 next 的入口：中間隔一層 pm2-start.sh，讓每次 start / restart 都
-      // 先 git pull，拉到新 commit 才重新 build。指定 interpreter 才不會被 pm2
-      // 當成 JS require（pnpm 的 .bin/* 是 shell shim，直接 require 會炸）。
-      script: __dirname + "/pm2-start.sh",
-      interpreter: "bash",
-      args: String(PORT),
+      // 直接跑 next 本體，中間沒有任何 shell 包裝：pull / install / migrate / build 全是
+      // deploy.sh 的事，pm2 只負責把已經 build 好的東西起來。
+      // 指 dist/bin/next 而不是 node_modules/.bin/next——後者是 pnpm 的 shell shim，
+      // 用 node interpreter 直接 require 會炸。
+      script: __dirname + "/node_modules/next/dist/bin/next",
+      interpreter: "node",
+      args: `start -H 127.0.0.1 -p ${PORT}`,
+      // V8 預設 heap limit ~1.5 GB，不到那個數字不積極 GC，RSS 會一路長到撞下面的
+      // 1G 線。384 MB 逼它提早回收；非 heap（Buffer、pg 連線）約 100–150 MB，
+      // 正常情況下 RSS 碰不到上限。
+      node_args: `--max-old-space-size=${HEAP_MB}`,
       // 8 GB 的機器跑一整排 Next，cluster 沒有意義。
       exec_mode: "fork",
       instances: 1,
@@ -63,12 +68,6 @@ module.exports = {
 
       env: {
         NODE_ENV: "production",
-        // V8 預設 heap limit ~1.5 GB，不到那個數字不積極 GC，RSS 會一路長到撞上面的
-        // 1G 線。384 MB 逼它提早回收；非 heap（Buffer、pg 連線）約 100–150 MB，
-        // 正常情況下 RSS 碰不到上限。
-        // ⚠️ 走 bash interpreter，所以不能用 node_args（那是給 node interpreter 的）。
-        //    pm2-start.sh 在 build 時會自行覆蓋這個值（build 要的記憶體遠不止 384 MB）。
-        NODE_OPTIONS: `--max-old-space-size=${HEAP_MB}`,
         PORT: String(PORT),
         HOSTNAME: "127.0.0.1",
       },

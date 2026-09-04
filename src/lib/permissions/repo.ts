@@ -1,7 +1,7 @@
 // 權限資料存取層：簽章路徑與 panel 都不直接碰 Prisma，只透過這裡。
 // email 一律小寫正規化——Subject.email 存的也是小寫，查找鍵才對得上。
 import "server-only";
-import { prisma } from "@/lib/db";
+import { prisma, type PrismaClientOrTx } from "@/lib/db";
 import type { Grant, Prisma, Subject } from "@/generated/prisma/client";
 
 export function findGrant(email: string, serviceId: string): Promise<Grant | null> {
@@ -35,9 +35,22 @@ export function createSubject(email: string): Promise<Subject> {
   return prisma.subject.create({ data: { email: email.toLowerCase() } });
 }
 
+// find-or-create 的原子版本：saveGrant / saveEntryYear 過去是
+// `findSubjectByEmail(email) ?? createSubject(email)` 兩支各自 await，兩個管理者
+// 同時對同一個尚未建過 row 的 email 存檔時會競態（都 find 到 null，都嘗試 create，
+// 一個因 email unique 撞 P2002 炸掉）。upsert 把「找不到就建」收斂成一次原子操作。
+export function ensureSubject(email: string, db: PrismaClientOrTx = prisma): Promise<Subject> {
+  const e = email.toLowerCase();
+  return db.subject.upsert({
+    where: { email: e },
+    create: { email: e },
+    update: {},
+  });
+}
+
 // 刪除 Subject：底下的 Grant 靠 schema 的 onDelete: Cascade 一起消失，不必手動先刪。
-export function deleteSubjectById(id: string): Promise<Subject> {
-  return prisma.subject.delete({ where: { id } });
+export function deleteSubjectById(id: string, db: PrismaClientOrTx = prisma): Promise<Subject> {
+  return db.subject.delete({ where: { id } });
 }
 
 // 登入成功時呼叫（callback/google/route.ts）：回填 sub/name、更新 lastSeenAt。
@@ -124,16 +137,19 @@ export function countSubjects(): Promise<number> {
 }
 
 // 建立或更新一筆 Grant（saveGrant action 唯一寫入口）。
-export function upsertGrant(input: {
-  subjectId: string;
-  serviceId: string;
-  role: string;
-  restriction: string;
-  reason: string | null;
-  expiresAt: Date | null;
-  updatedBy: string;
-}): Promise<Grant> {
-  return prisma.grant.upsert({
+export function upsertGrant(
+  input: {
+    subjectId: string;
+    serviceId: string;
+    role: string;
+    restriction: string;
+    reason: string | null;
+    expiresAt: Date | null;
+    updatedBy: string;
+  },
+  db: PrismaClientOrTx = prisma,
+): Promise<Grant> {
+  return db.grant.upsert({
     where: { subjectId_serviceId: { subjectId: input.subjectId, serviceId: input.serviceId } },
     create: {
       subjectId: input.subjectId,
@@ -157,8 +173,11 @@ export function upsertGrant(input: {
 // ban 時呼叫（saveGrant）：把 Subject.sessionsValidFrom 設為 now()——早於這個時間簽出的
 // auth session 全部失效，被 ban 者的 SSO 態立刻死亡，換不到任何新的 per-service 票
 // （已發出去的舊票仍活到各自 TTL，見 session.ts getSession 的比對邏輯）。
-export function touchSessionsValidFrom(subjectId: string): Promise<Subject> {
-  return prisma.subject.update({
+export function touchSessionsValidFrom(
+  subjectId: string,
+  db: PrismaClientOrTx = prisma,
+): Promise<Subject> {
+  return db.subject.update({
     where: { id: subjectId },
     data: { sessionsValidFrom: new Date() },
   });
@@ -236,30 +255,34 @@ export function applyRoleChanges(input: {
   actorEmail: string;
 }): Promise<unknown[]> {
   const actorEmail = input.actorEmail.toLowerCase();
-  return prisma.$transaction([
-    ...input.ops.map((op) =>
-      prisma.grant.upsert({
-        where: { subjectId_serviceId: { subjectId: op.subjectId, serviceId: op.serviceId } },
-        create: {
-          subjectId: op.subjectId,
+  // 最多 200 email × N 服務筆數的 upsert + 一筆 createMany，預設 5 秒逾時撐不住——顯式給長一點。
+  return prisma.$transaction(
+    [
+      ...input.ops.map((op) =>
+        prisma.grant.upsert({
+          where: { subjectId_serviceId: { subjectId: op.subjectId, serviceId: op.serviceId } },
+          create: {
+            subjectId: op.subjectId,
+            serviceId: op.serviceId,
+            role: op.role,
+            updatedBy: actorEmail,
+          },
+          update: { role: op.role, updatedBy: actorEmail },
+        }),
+      ),
+      prisma.auditLog.createMany({
+        data: input.ops.map((op) => ({
+          actorEmail,
+          targetEmail: op.targetEmail.toLowerCase(),
           serviceId: op.serviceId,
-          role: op.role,
-          updatedBy: actorEmail,
-        },
-        update: { role: op.role, updatedBy: actorEmail },
+          action: "role.change",
+          before: op.before ?? undefined,
+          after: { role: op.role },
+        })),
       }),
-    ),
-    prisma.auditLog.createMany({
-      data: input.ops.map((op) => ({
-        actorEmail,
-        targetEmail: op.targetEmail.toLowerCase(),
-        serviceId: op.serviceId,
-        action: "role.change",
-        before: op.before ?? undefined,
-        after: { role: op.role },
-      })),
-    }),
-  ]);
+    ],
+    { timeout: 30_000 },
+  );
 }
 
 export type GrantWithSubject = Grant & { subject: Subject };

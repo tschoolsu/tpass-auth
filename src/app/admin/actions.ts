@@ -10,10 +10,10 @@ import {
   type AdminActor,
 } from "@/lib/admin-guard";
 import { authConfig } from "@/config/auth";
+import { prisma } from "@/lib/db";
 import {
-  findSubjectByEmail,
+  ensureSubject,
   findSubjectWithGrants,
-  createSubject as createSubjectRow,
   deleteSubjectById,
   findGrantByServiceAndSubject,
   upsertGrant,
@@ -93,16 +93,25 @@ export async function deleteSubjectAction(emailRaw: string): Promise<ActionResul
     })),
   };
 
-  await deleteSubjectById(subject.id);
-
-  await recordAudit({
-    actorEmail: session.email,
-    targetEmail: email,
-    serviceId: "auth",
-    action: "subject.delete",
-    before,
-    after: null,
-  });
+  // 刪除與稽核包同一筆交易——不然「刪了但沒記到稽核」這種斷鏈狀態理論上會發生
+  // （中間 process 被砍、DB 連線斷）。
+  await prisma.$transaction(
+    async (tx) => {
+      await deleteSubjectById(subject.id, tx);
+      await recordAudit(
+        {
+          actorEmail: session.email,
+          targetEmail: email,
+          serviceId: "auth",
+          action: "subject.delete",
+          before,
+          after: null,
+        },
+        tx,
+      );
+    },
+    { timeout: 10_000 },
+  );
 
   // 一次刪掉的 Grant 可能橫跨多個服務，逐頁列舉容易漏——整個 /admin 子樹一起失效。
   revalidatePath("/admin", "layout");
@@ -153,7 +162,7 @@ export async function saveGrant(input: SaveGrantInput): Promise<ActionResult> {
   // 前置步驟——過去這裡回「請先建立」，等於把機械限制推給人做一次多餘的來回。
   // 人不必登入過（先建、先給權限，等他來），登入時 upsertSubjectOnLogin 會回填 sub/name。
   if (!isValidEmail(email)) return { ok: false, error: "email 格式不正確" };
-  const subject = (await findSubjectByEmail(email)) ?? (await createSubjectRow(email));
+  const subject = await ensureSubject(email);
 
   const existing = await findGrantByServiceAndSubject(subject.id, serviceId);
   const currentRole: Role = (existing?.role as Role | undefined) ?? "default";
@@ -181,59 +190,73 @@ export async function saveGrant(input: SaveGrantInput): Promise<ActionResult> {
       }
     : null;
 
-  const grant = await upsertGrant({
-    subjectId: subject.id,
-    serviceId,
-    role: input.role,
-    restriction: input.restriction,
-    reason: input.restriction === "none" ? null : reason,
-    expiresAt,
-    updatedBy: session.email,
-  });
+  // upsertGrant → ban 生效（touchSessionsValidFrom）→ 稽核紀錄包同一筆交易：
+  // 三段各自 await 的話，中間任何一步失敗都會留下斷鏈狀態（例如 ban 已生效但稽核沒寫，
+  // 「誰把我 ban 的」查不到）。
+  await prisma.$transaction(
+    async (tx) => {
+      const grant = await upsertGrant(
+        {
+          subjectId: subject.id,
+          serviceId,
+          role: input.role,
+          restriction: input.restriction,
+          reason: input.restriction === "none" ? null : reason,
+          expiresAt,
+          updatedBy: session.email,
+        },
+        tx,
+      );
 
-  const after = {
-    role: grant.role,
-    restriction: grant.restriction,
-    reason: grant.reason,
-    expiresAt: grant.expiresAt?.toISOString() ?? null,
-  };
+      const after = {
+        role: grant.role,
+        restriction: grant.restriction,
+        reason: grant.reason,
+        expiresAt: grant.expiresAt?.toISOString() ?? null,
+      };
 
-  // ban 生效：Subject.sessionsValidFrom 設為 now()——讓被 ban 者的 auth 登入態立刻死亡
-  // （getSession 會拒絕早於此時間 iat 的 token），不必等現有 session 自然過期才失去 SSO 能力。
-  if (input.restriction === "ban") {
-    await touchSessionsValidFrom(subject.id);
-  }
+      // ban 生效：Subject.sessionsValidFrom 設為 now()——讓被 ban 者的 auth 登入態立刻死亡
+      // （getSession 會拒絕早於此時間 iat 的 token），不必等現有 session 自然過期才失去 SSO 能力。
+      if (input.restriction === "ban") {
+        await touchSessionsValidFrom(subject.id, tx);
+      }
 
-  // ── 稽核：依實際變動內容分開記，一次存檔可能同時觸發多種 action ──
-  // 用「目前有效值」比較（沒有 existing row 時等同 default/none），不是「有沒有 existing row」——
-  // 否則對從沒被動過的人存一次全預設值也會生出假的 role.change 稽核噪音。
-  const currentRestriction = existing?.restriction ?? "none";
-  const roleChanged = currentRole !== grant.role;
-  const restrictionChanged = currentRestriction !== grant.restriction;
-  const onlyMetaChanged =
-    !roleChanged &&
-    !restrictionChanged &&
-    existing !== null &&
-    (existing.reason !== grant.reason ||
-      existing.expiresAt?.getTime() !== grant.expiresAt?.getTime());
+      // ── 稽核：依實際變動內容分開記，一次存檔可能同時觸發多種 action ──
+      // 用「目前有效值」比較（沒有 existing row 時等同 default/none），不是「有沒有 existing row」——
+      // 否則對從沒被動過的人存一次全預設值也會生出假的 role.change 稽核噪音。
+      const currentRestriction = existing?.restriction ?? "none";
+      const roleChanged = currentRole !== grant.role;
+      const restrictionChanged = currentRestriction !== grant.restriction;
+      const onlyMetaChanged =
+        !roleChanged &&
+        !restrictionChanged &&
+        existing !== null &&
+        (existing.reason !== grant.reason ||
+          existing.expiresAt?.getTime() !== grant.expiresAt?.getTime());
 
-  const auditActions: string[] = [];
-  if (roleChanged) auditActions.push("role.change");
-  if (restrictionChanged) {
-    auditActions.push(grant.restriction === "none" ? "restriction.clear" : "restriction.set");
-  }
-  if (onlyMetaChanged) auditActions.push("grant.edit");
+      const auditActions: string[] = [];
+      if (roleChanged) auditActions.push("role.change");
+      if (restrictionChanged) {
+        auditActions.push(grant.restriction === "none" ? "restriction.clear" : "restriction.set");
+      }
+      if (onlyMetaChanged) auditActions.push("grant.edit");
 
-  for (const action of auditActions) {
-    await recordAudit({
-      actorEmail: session.email,
-      targetEmail: email,
-      serviceId,
-      action,
-      before,
-      after,
-    });
-  }
+      for (const action of auditActions) {
+        await recordAudit(
+          {
+            actorEmail: session.email,
+            targetEmail: email,
+            serviceId,
+            action,
+            before,
+            after,
+          },
+          tx,
+        );
+      }
+    },
+    { timeout: 10_000 },
+  );
 
   revalidatePath(`/admin/people/${encodeURIComponent(email)}`);
   revalidatePath("/admin/people");
@@ -275,7 +298,7 @@ export async function saveEntryYear(input: SaveEntryYearInput): Promise<ActionRe
   }
 
   // 沿用 saveGrant 的做法：沒建過就順手建，不要把「row 存不存在」推給人先處理。
-  const subject = (await findSubjectByEmail(email)) ?? (await createSubjectRow(email));
+  const subject = await ensureSubject(email);
   const before = { entryYearOverride: subject.entryYearOverride };
 
   if (subject.entryYearOverride === input.entryYear) {

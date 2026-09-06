@@ -56,6 +56,22 @@ const DEFAULT_SESSION_TTL_SECONDS = 43200;
 
 const baseUrl = process.env.AUTH_BASE_URL!;
 
+// A1-11：AUTH_BASE_URL 打錯（漏了子網域、抄到別的網域）不該悄悄跑起來——cookie／
+// redirect_uri／JWKS url 全部繞著它建，錯了要在啟動時就 throw，不要等部署後才被
+// 使用者回報「登入轉圈圈」。本機／整合測試用 loopback（127.0.0.1／localhost）跑，
+// 那是開發慣用的跑法，不代表設定錯誤，不受這條限制。
+{
+  const baseUrlHost = new URL(baseUrl).hostname;
+  const suffix = process.env.AUTH_ALLOWED_HOST_SUFFIX!;
+  const isLoopback = baseUrlHost === "localhost" || baseUrlHost === "127.0.0.1" || baseUrlHost === "::1";
+  const isUnderSuffix = baseUrlHost === suffix || baseUrlHost.endsWith("." + suffix);
+  if (!isLoopback && !isUnderSuffix) {
+    throw new Error(
+      `[config/auth] AUTH_BASE_URL 的 host（${baseUrlHost}）不在 AUTH_ALLOWED_HOST_SUFFIX（${suffix}）底下`,
+    );
+  }
+}
+
 export const authConfig = {
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID!,

@@ -9,6 +9,31 @@ export const google = new Google(
   authConfig.google.redirectUri,
 );
 
+// A1-8：打 Google 的兩支 fetch 都沒有逾時，undici 預設要等 5 分鐘才會放棄——
+// Google 那端卡住時，使用者會對著轉圈圈的 callback 頁面等到天荒地老。
+export const GOOGLE_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * 幫沒有 AbortSignal 參數的 promise（例如 arctic 的 validateAuthorizationCode）
+ * 包一層逾時。逾時就 reject，呼叫端原本的 catch 區塊會接住，導去既有的錯誤頁——
+ * 不需要新增錯誤碼。
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`逾時（${ms}ms）`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 // redirect_uri 白名單比對（安全關鍵，防 Open Redirect）。
 // 必須是 host === base 或 host 以 '.'+base 結尾；
 // 不可用裸 hostname.endsWith(base)，否則 evil-localhost / localhost.attacker.com 會通過。
@@ -20,6 +45,11 @@ export function isAllowedRedirect(rawUrl: string): boolean {
     return false;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  // A1-7：正式環境只放行 https——http 的 redirect_uri 會讓 authorize 的
+  // form_post（帶著 per-service token）用明文送出，中間人可截走整張票。
+  // 「正式」沿用這個 codebase 對 cookieSecure 的既有定義：AUTH_BASE_URL 本身
+  // 是 https 才算正式，本機／整合測試的 baseUrl 是 http，維持兩者皆放行不受影響。
+  if (authConfig.cookieSecure && url.protocol !== "https:") return false;
   const host = url.hostname;
   const base = authConfig.allowedHostSuffix;
   return host === base || host.endsWith("." + base);

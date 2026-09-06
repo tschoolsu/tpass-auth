@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   decodeFlow,
   encodeFlow,
@@ -9,6 +9,18 @@ import {
   OAUTH_FLOW_MAX,
   OAUTH_FLOW_PREFIX,
 } from "./oauth";
+
+/** 用指定的 AUTH_BASE_URL（決定 authConfig.cookieSecure）重新載入 lib/oauth.ts。 */
+async function importOauthWith(baseUrl: string) {
+  const prev = process.env.AUTH_BASE_URL;
+  process.env.AUTH_BASE_URL = baseUrl;
+  vi.resetModules();
+  try {
+    return await import("./oauth");
+  } finally {
+    process.env.AUTH_BASE_URL = prev;
+  }
+}
 
 const BASE_URL = "http://auth.lvh.me:3000";
 
@@ -89,6 +101,22 @@ describe("isAllowedRedirect（Open Redirect 防線）", () => {
     expect(isAllowedRedirect("")).toBe(false);
     expect(isAllowedRedirect("//evil.example/cb")).toBe(false);
     expect(isAllowedRedirect("/relative/path")).toBe(false);
+  });
+});
+
+describe("isAllowedRedirect（A1-7：正式環境只放行 https）", () => {
+  // authConfig.cookieSecure（= AUTH_BASE_URL 是不是 https）就是這個 codebase 對「正式」
+  // 的既有定義（見 config/auth.ts 對 cookieSecure 的註解），本機／測試 baseUrl 是 http
+  // 時維持兩者皆放行——不然這個檔案上面那些用 http fixture 的測試全部會被自己的修正擋下。
+  it("正式（baseUrl 是 https）：http 的 redirect_uri 被擋，票不會被明文 form POST 出去", async () => {
+    const { isAllowedRedirect: prodIsAllowed } = await importOauthWith("https://auth.tpass.test");
+    expect(prodIsAllowed("http://vote.tpass.test/callback")).toBe(false);
+    expect(prodIsAllowed("https://vote.tpass.test/callback")).toBe(true);
+  });
+
+  it("本機／測試（baseUrl 是 http）：http 的 redirect_uri 照常放行", async () => {
+    const { isAllowedRedirect: devIsAllowed } = await importOauthWith("http://localhost:3000");
+    expect(devIsAllowed("http://vote.tpass.test/callback")).toBe(true);
   });
 });
 

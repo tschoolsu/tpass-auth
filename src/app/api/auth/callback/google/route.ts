@@ -6,6 +6,8 @@ import {
   isAllowedRedirect,
   decodeFlow,
   flowCookieName,
+  withTimeout,
+  GOOGLE_FETCH_TIMEOUT_MS,
   OAUTH_COOKIES,
 } from "@/lib/oauth";
 import {
@@ -66,9 +68,15 @@ export async function GET(request: NextRequest) {
       : authConfig.portalUrl;
 
   // 用 codeVerifier 換 token。
+  // A1-8：undici 預設逾時是 5 分鐘，Google 那端卡住會讓使用者對著轉圈圈的頁面
+  // 等到天荒地老——加 10 秒逾時，逾時當一般 OAuth 失敗處理（既有錯誤頁，不新增錯誤碼）。
+  // arctic 的 validateAuthorizationCode 不吃 AbortSignal，用 withTimeout 包一層。
   let accessToken: string;
   try {
-    const tokens = await google.validateAuthorizationCode(code, codeVerifier);
+    const tokens = await withTimeout(
+      google.validateAuthorizationCode(code, codeVerifier),
+      GOOGLE_FETCH_TIMEOUT_MS,
+    );
     accessToken = tokens.accessToken();
   } catch {
     return fail("oauth");
@@ -79,6 +87,7 @@ export async function GET(request: NextRequest) {
   try {
     const res = await fetch(GOOGLE_USERINFO, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(GOOGLE_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return fail("oauth");
     profile = (await res.json()) as GoogleProfile;

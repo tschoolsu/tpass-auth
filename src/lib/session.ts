@@ -11,7 +11,8 @@ import {
 import { authConfig } from "@/config/auth";
 import { permissionsFor, overviewFor } from "@/lib/permissions/resolve";
 import { findSubjectByEmail } from "@/lib/permissions/repo";
-import type { PermissionMap } from "@/lib/permissions/types";
+import type { PermissionEntry, PermissionMap } from "@/lib/permissions/types";
+import type { Subject } from "@/generated/prisma/client";
 import { effectiveEntryYear } from "@/lib/entry-year";
 
 // T-Pass 對接合約：簽進 JWT 的身分內容。
@@ -80,12 +81,18 @@ const AUTH_SELF_AUDIENCE = serviceAudience("auth");
 // ttlSeconds 拆成參數而非共用一顆設定：auth 登入態（session）與 per-service token
 // 生命週期語意不同——session 要撐住整段瀏覽（太短會逼使用者頻繁重登 Google），
 // per-service token 要短（換票成本低，縮小外洩窗口）。
+// maxExp（選填）：exp 不得超過的上限（Unix 秒）。per-service token 用它把 exp 貼著
+// auth 登入態自己的 exp（A2-4）——登入態已經快過期時，per-service 票不該還套用
+// 完整 TTL，那等於變相延長了使用者的有效登入時間。用同一個 now 算 exp 與比較上限，
+// 避免 signServiceToken 端另外算一次 now 導致極端情況下 off-by-one 秒。
 async function sign(
   claims: Omit<TPassClaims, "exp" | "iat">,
   audience: string,
   ttlSeconds: number,
+  maxExp?: number,
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
+  const exp = maxExp !== undefined ? Math.min(now + ttlSeconds, maxExp) : now + ttlSeconds;
   const privateKey = await getPrivateKey();
   const payload: Record<string, unknown> = {
     email: claims.email,
@@ -100,7 +107,7 @@ async function sign(
     .setIssuer(authConfig.jwt.issuer)
     .setAudience(audience)
     .setIssuedAt(now)
-    .setExpirationTime(now + ttlSeconds)
+    .setExpirationTime(exp)
     .sign(privateKey);
 }
 
@@ -120,30 +127,54 @@ export const signAuthSession = (identity: TPassIdentity) =>
 // permissions（Phase 4）：一般服務只塞自己一把 key（最小揭露，別服務的 reason 不外洩）；
 // 若 serviceId ∈ AUTH_OVERVIEW_SERVICE_IDS（大廳／門戶）→ 塞全服務 map（含 "auth"），
 // 這是 portal 顯示 ban/warning 徽章與「權限管理」卡的資料來源。
+export interface SignServiceTokenOptions {
+  /** authorize 熱路徑已經查過的 auth 登入態 exp；per-service token 的 exp 不得超過它（A2-4）。 */
+  sessionExp?: number;
+  /**
+   * authorize 熱路徑已經替這個 (email, serviceId) 查過的權限——只在非 overview 服務時
+   * 會被用到（overview 服務要的是全服務 map，跟這裡是不同查詢，沒得重用）。
+   * 省一次 permissionsFor（A1-11：同一組 (email, service) 一次 authorize 不必查兩次）。
+   */
+  perm?: PermissionEntry;
+  /**
+   * authorize 熱路徑（getSessionForAuthorize）已經查過的 Subject，重用來算 entryYearOverride，
+   * 省一次 findSubjectByEmail。傳 null 代表「查過了、查失敗或沒有這筆」，一樣不再查一次
+   * （維持跟原本 fail-open 一致的降級語意）；不傳（undefined）才會自己查一次。
+   */
+  subject?: Subject | null;
+}
+
 export async function signServiceToken(
   identity: TPassIdentity,
   serviceId: string,
+  options: SignServiceTokenOptions = {},
 ): Promise<string> {
   const isOverview = authConfig.overviewServiceIds.includes(serviceId);
   const permissions: PermissionMap = isOverview
     ? await overviewFor(identity.email)
-    : { [serviceId]: await permissionsFor(identity.email, serviceId) };
+    : { [serviceId]: options.perm ?? (await permissionsFor(identity.email, serviceId)) };
   // 屆別：DB 覆寫優先，沒有就照 email 推。
   // fail-open：這個查詢失敗不該讓整個發證流程掛掉——permissionsFor 與 getSession
   // 面對 DB 故障都是降級處理，簽章路徑不能為了一個顯示用欄位就變成硬依賴 DB。
   // 查不到就當作沒有覆寫、照 email 推：語意等同舊 token，消費端本來就會 fallback。
-  let entryYearOverride: number | null = null;
-  try {
-    const subject = await findSubjectByEmail(identity.email);
-    entryYearOverride = subject?.entryYearOverride ?? null;
-  } catch (err) {
-    console.error(`[session] entryYearOverride 查詢失敗，降級為照 email 推算（fail-open）：`, err);
+  let entryYearOverride: number | null;
+  if (options.subject !== undefined) {
+    entryYearOverride = options.subject?.entryYearOverride ?? null;
+  } else {
+    entryYearOverride = null;
+    try {
+      const subject = await findSubjectByEmail(identity.email);
+      entryYearOverride = subject?.entryYearOverride ?? null;
+    } catch (err) {
+      console.error(`[session] entryYearOverride 查詢失敗，降級為照 email 推算（fail-open）：`, err);
+    }
   }
   const entryYear = effectiveEntryYear(identity.email, entryYearOverride);
   return sign(
     { ...identity, permissions, entryYear },
     serviceAudience(serviceId),
     authConfig.jwt.ttlSeconds,
+    options.sessionExp,
   );
 }
 
@@ -186,19 +217,24 @@ export async function verifySession(
   }
 }
 
-// 讀 auth 目前的登入態：v2 host-only cookie，沒有就是沒登入。
+// 讀 auth 目前的登入態＋順便查一次 Subject（sessionsValidFrom 撤銷檢查要用）。
+// getSession 與 getSessionForAuthorize 共用這支，避免同一個 email 在同一次請求裡
+// 被 findSubjectByEmail 查兩次（A1-11）。
 // Phase 3 補強：驗章成功後再比對 Subject.sessionsValidFrom——ban 時 panel 會把它設為 now()，
 // 早於這個時間簽出的 auth session 一律視同未登入（被 ban 者換不到任何新的 per-service 票）。
 // 只查 Subject 表（輕量、無 join），DB 掛掉 fail-open：查詢失敗不影響既有登入態。
-export async function getSession(): Promise<TPassClaims | null> {
+async function loadSessionAndSubject(): Promise<
+  { claims: TPassClaims; subject: Subject | null } | null
+> {
   const jar = await cookies();
   const own = jar.get(authConfig.sessionCookieName)?.value;
   if (!own) return null;
   const claims = await verifySession(own, AUTH_SELF_AUDIENCE);
   if (!claims) return null;
 
+  let subject: Subject | null = null;
   try {
-    const subject = await findSubjectByEmail(claims.email);
+    subject = await findSubjectByEmail(claims.email);
     if (subject?.sessionsValidFrom && claims.iat < Math.floor(subject.sessionsValidFrom.getTime() / 1000)) {
       return null;
     }
@@ -206,7 +242,20 @@ export async function getSession(): Promise<TPassClaims | null> {
     console.error(`[session] sessionsValidFrom 查詢失敗，降級為信任既有 token（fail-open）：`, err);
   }
 
-  return claims;
+  return { claims, subject };
+}
+
+export async function getSession(): Promise<TPassClaims | null> {
+  const result = await loadSessionAndSubject();
+  return result?.claims ?? null;
+}
+
+// authorize 熱路徑專用：跟 getSession 一樣驗登入態，但把順便查到的 Subject 一併回傳，
+// 讓呼叫端可以轉手塞給 signServiceToken（省掉它自己再查一次 findSubjectByEmail）。
+export async function getSessionForAuthorize(): Promise<
+  { claims: TPassClaims; subject: Subject | null } | null
+> {
+  return loadSessionAndSubject();
 }
 
 // 把 Google profile 映射成 T-Pass 身份（不含權限——權限在發 per-service token 時才查）。

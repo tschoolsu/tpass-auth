@@ -5,7 +5,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { authConfig } from "@/config/auth";
 import { isAllowedRedirect, safeNextPath } from "@/lib/oauth";
-import { getSession, signServiceToken } from "@/lib/session";
+import { getSessionForAuthorize, signServiceToken } from "@/lib/session";
 import { permissionsFor } from "@/lib/permissions/resolve";
 import { registry } from "@/lib/registry";
 
@@ -67,8 +67,8 @@ export async function GET(request: NextRequest) {
     return reject("invalid-next");
   }
 
-  const session = await getSession();
-  if (!session) {
+  const sessionResult = await getSessionForAuthorize();
+  if (!sessionResult) {
     // 沒登入 → 走既有 OAuth，完成後回到本 route 再發 token。
     const backHere = new URL("/api/auth/authorize", authConfig.baseUrl);
     backHere.searchParams.set("service", serviceId);
@@ -79,6 +79,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(login);
   }
 
+  const { claims: session, subject } = sessionResult;
+
   // ban 攔截：查該人在這個服務的權限，read===false（restriction=ban 且未過期）就不簽 token，
   // 直接導去 /denied——reason 絕不放進這裡的 query string，/denied 自己憑 session 重查。
   const perm = await permissionsFor(session.email, serviceId);
@@ -88,8 +90,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(denied);
   }
 
-  // 重簽新 token（丟掉舊 exp，讓 per-service token 拿到完整 TTL）。
-  // permissions 由 signServiceToken 依 serviceId 查（DB），不從 auth 登入態帶（登入態 permissions 恆空）。
+  // 重簽新 token（exp 貼著 auth 登入態自己的 exp，不超過它，見 A2-4）。
+  // permissions／subject 都轉手塞給 signServiceToken：上面已經替同一組 (email, serviceId)
+  // 查過 perm，getSessionForAuthorize 也已經查過 Subject，不必再各自查一次（A1-11）。
   const token = await signServiceToken(
     {
       sub: session.sub,
@@ -97,6 +100,7 @@ export async function GET(request: NextRequest) {
       name: session.name,
     },
     serviceId,
+    { sessionExp: session.exp, perm, subject },
   );
 
   // form_post：token 走 POST body，不落 URL。JS 自動送出；無 JS 給一顆按鈕。

@@ -26,19 +26,37 @@ export function isAllowedRedirect(rawUrl: string): boolean {
 }
 
 // next 白名單比對（防 Open Redirect 的另一半）。
-// 不能只檢查字串前綴：`/\evil.invalid` 也是以單一 `/` 開頭、不是 `//` 開頭，
-// 但瀏覽器與部分 URL 正規化會把 `\` 當成 `/`，等於變成 protocol-relative 網址
-// 指去外部網域。用 `new URL(next, baseUrl)` 解析後比對 origin 才是真的可靠：
-// 只要解析結果的 origin 跑出 baseUrl，就代表這個 next 會被導去別的網域。
-export function isAllowedNext(next: string, baseUrl: string): boolean {
-  if (!next.startsWith("/") || next.startsWith("//")) return false;
+//
+// 兩段式檢查，缺一都會被繞過（A4-1 補修，與 tpass-auth-js 的 safeNextPath 同款）：
+//
+// 1. **輸入階段：origin 比對。** 不能只檢查字串前綴：`/\evil.invalid` 也是以單一
+//    `/` 開頭、不是 `//` 開頭，但瀏覽器與部分 URL 正規化會把 `\` 當成 `/`，等於
+//    變成 protocol-relative 網址指去外部網域。用 `new URL(next, baseUrl)` 解析後
+//    比對 origin 才可靠。
+// 2. **輸出階段：擋 `//` 開頭。** 步驟 1 只保證「這次解析」沒有跑出 origin，但
+//    `..`／反斜線／百分號編碼在正規化路徑段時會互相疊加，把 `/..//evil.example`
+//    這類字串的 pathname 收斂成 `//evil.example`——這一步 origin 仍然等於
+//    baseUrl（`..` 已經被吃掉、根本沒跑出去），檢查騙不了。但呼叫端
+//    （消費端 callback）會拿這個回傳值**再解析一次** `new URL(next, selfUrl)`，
+//    而 `//evil.example` 是合法的 protocol-relative URL：第二次解析會把它當成
+//    「沿用 selfUrl 的 scheme、換成 evil.example 的 host」，這才真正跑出網域。
+//    所以輸出本身也不能以 `//` 開頭。
+//
+// 回傳「正規化後的路徑」（`pathname+search+hash`）而不是布林：呼叫端只准塞這個
+// 回傳值，不准塞使用者原字串——原字串長怎樣不重要，重要的是丟給下一關的字串必須安全。
+// 不合法回空字串。輸出是不動點：`safeNextPath(safeNextPath(x, base), base) === safeNextPath(x, base)`。
+export function safeNextPath(next: string, baseUrl: string): string {
+  if (!next.startsWith("/") || next.startsWith("//")) return "";
   let url: URL;
   try {
     url = new URL(next, baseUrl);
   } catch {
-    return false;
+    return "";
   }
-  return url.origin === new URL(baseUrl).origin;
+  if (url.origin !== new URL(baseUrl).origin) return "";
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  if (path.startsWith("//")) return "";
+  return path;
 }
 
 // ── 進行中的 OAuth 流程 ────────────────────────────────────────────────

@@ -5,9 +5,12 @@ import {
   flowCookieName,
   flowsToEvict,
   isAllowedRedirect,
+  safeNextPath,
   OAUTH_FLOW_MAX,
   OAUTH_FLOW_PREFIX,
 } from "./oauth";
+
+const BASE_URL = "http://auth.lvh.me:3000";
 
 describe("進行中的 OAuth 流程（一條流程一顆 cookie）", () => {
   it("cookie 名稱帶 state，不同流程互不覆蓋", () => {
@@ -86,5 +89,54 @@ describe("isAllowedRedirect（Open Redirect 防線）", () => {
     expect(isAllowedRedirect("")).toBe(false);
     expect(isAllowedRedirect("//evil.example/cb")).toBe(false);
     expect(isAllowedRedirect("/relative/path")).toBe(false);
+  });
+});
+
+describe("safeNextPath（A4-1 補修：next 輸出正規化路徑並擋 //）", () => {
+  // origin 比對這一關會通過（`..`／反斜線／百分號編碼被正規化收斂後，
+  // pathname 變成 `//evil.example`，但這個結果仍落在站內 origin），
+  // 必須靠「輸出不可以 `//` 開頭」這第二道關卡擋下。
+  it("正規化後 pathname 收斂成 // 開頭的變體，一律視為不合法", () => {
+    const evil = [
+      "/..//evil.example",
+      "/./..//evil.example",
+      "/a/../..//evil.example",
+      "/../\\evil.example",
+      "/%2e%2e//evil.example",
+      "/..\\/evil.example",
+    ];
+    for (const next of evil) {
+      expect(safeNextPath(next, BASE_URL), `next=${next} 沒被擋`).toBe("");
+    }
+  });
+
+  it("一般的 .. 路徑正常收斂", () => {
+    expect(safeNextPath("/a/../b", BASE_URL)).toBe("/b");
+  });
+
+  it("看起來像但不是 // 開頭的路徑照樣放行", () => {
+    expect(safeNextPath("/...//x", BASE_URL)).toBe("/...//x");
+  });
+
+  it("保留 query string 與 hash", () => {
+    expect(safeNextPath("/e/abc?x=1#y", BASE_URL)).toBe("/e/abc?x=1#y");
+  });
+
+  it("是不動點：對輸出再跑一次結果不變", () => {
+    const inputs = ["/a/../b", "/...//x", "/e/abc?x=1#y", "/dashboard"];
+    for (const x of inputs) {
+      const once = safeNextPath(x, BASE_URL);
+      expect(safeNextPath(once, BASE_URL)).toBe(once);
+    }
+  });
+
+  it("跑出站內 origin 的一律擋", () => {
+    expect(safeNextPath("https://evil.example", BASE_URL)).toBe("");
+    expect(safeNextPath("evil", BASE_URL)).toBe("");
+  });
+
+  it("不是以單一 / 開頭一律擋", () => {
+    expect(safeNextPath("//evil.example", BASE_URL)).toBe("");
+    expect(safeNextPath("relative", BASE_URL)).toBe("");
   });
 });

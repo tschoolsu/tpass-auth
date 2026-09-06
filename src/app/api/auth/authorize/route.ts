@@ -4,7 +4,7 @@
 // 沒有登入態就先走既有 Google OAuth，回來再繼續（redirect_uri 指回本 route）。
 import { NextResponse, type NextRequest } from "next/server";
 import { authConfig } from "@/config/auth";
-import { isAllowedNext, isAllowedRedirect } from "@/lib/oauth";
+import { isAllowedRedirect, safeNextPath } from "@/lib/oauth";
 import { getSession, signServiceToken } from "@/lib/session";
 import { permissionsFor } from "@/lib/permissions/resolve";
 import { registry } from "@/lib/registry";
@@ -60,7 +60,10 @@ export async function GET(request: NextRequest) {
     return reject("invalid-redirect");
   }
   // next 只能是站內路徑（消費端 callback 會拿它做最後跳轉，不能被塞外部網址）。
-  if (!isAllowedNext(next, authConfig.baseUrl)) {
+  // 用回傳的正規化路徑，不再往下傳使用者原字串——原字串裡的 `..`／反斜線／
+  // 百分號編碼即使 origin 比對過了，也可能在消費端第二次解析時跑出站外（A4-1）。
+  const safeNext = safeNextPath(next, authConfig.baseUrl);
+  if (!safeNext) {
     return reject("invalid-next");
   }
 
@@ -70,7 +73,7 @@ export async function GET(request: NextRequest) {
     const backHere = new URL("/api/auth/authorize", authConfig.baseUrl);
     backHere.searchParams.set("service", serviceId);
     backHere.searchParams.set("redirect_uri", redirectUri);
-    backHere.searchParams.set("next", next);
+    backHere.searchParams.set("next", safeNext);
     const login = new URL("/api/auth/login", authConfig.baseUrl);
     login.searchParams.set("redirect_uri", backHere.toString());
     return NextResponse.redirect(login);
@@ -102,7 +105,7 @@ export async function GET(request: NextRequest) {
 <body onload="document.forms[0].submit()">
 <form method="post" action="${escapeHtml(redirectUri)}">
 <input type="hidden" name="token" value="${escapeHtml(token)}">
-<input type="hidden" name="next" value="${escapeHtml(next)}">
+<input type="hidden" name="next" value="${escapeHtml(safeNext)}">
 <noscript><button type="submit">繼續前往服務</button></noscript>
 </form>
 </body></html>`;

@@ -4,7 +4,7 @@
 // 沒有登入態就先走既有 Google OAuth，回來再繼續（redirect_uri 指回本 route）。
 import { NextResponse, type NextRequest } from "next/server";
 import { authConfig } from "@/config/auth";
-import { isAllowedRedirect } from "@/lib/oauth";
+import { isAllowedNext, isAllowedRedirect } from "@/lib/oauth";
 import { getSession, signServiceToken } from "@/lib/session";
 import { permissionsFor } from "@/lib/permissions/resolve";
 
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
     return reject("invalid-redirect");
   }
   // next 只能是站內路徑（消費端 callback 會拿它做最後跳轉，不能被塞外部網址）。
-  if (!next.startsWith("/") || next.startsWith("//")) {
+  if (!isAllowedNext(next, authConfig.baseUrl)) {
     return reject("invalid-next");
   }
 

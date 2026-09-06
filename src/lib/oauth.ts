@@ -25,6 +25,22 @@ export function isAllowedRedirect(rawUrl: string): boolean {
   return host === base || host.endsWith("." + base);
 }
 
+// next 白名單比對（防 Open Redirect 的另一半）。
+// 不能只檢查字串前綴：`/\evil.invalid` 也是以單一 `/` 開頭、不是 `//` 開頭，
+// 但瀏覽器與部分 URL 正規化會把 `\` 當成 `/`，等於變成 protocol-relative 網址
+// 指去外部網域。用 `new URL(next, baseUrl)` 解析後比對 origin 才是真的可靠：
+// 只要解析結果的 origin 跑出 baseUrl，就代表這個 next 會被導去別的網域。
+export function isAllowedNext(next: string, baseUrl: string): boolean {
+  if (!next.startsWith("/") || next.startsWith("//")) return false;
+  let url: URL;
+  try {
+    url = new URL(next, baseUrl);
+  } catch {
+    return false;
+  }
+  return url.origin === new URL(baseUrl).origin;
+}
+
 // ── 進行中的 OAuth 流程 ────────────────────────────────────────────────
 //
 // 一條流程一顆 cookie，名稱帶 state：`oauth_flow_<state>`。

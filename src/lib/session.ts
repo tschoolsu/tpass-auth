@@ -133,7 +133,7 @@ export interface SignServiceTokenOptions {
   /**
    * authorize 熱路徑已經替這個 (email, serviceId) 查過的權限——只在非 overview 服務時
    * 會被用到（overview 服務要的是全服務 map，跟這裡是不同查詢，沒得重用）。
-   * 省一次 permissionsFor（A1-11：同一組 (email, service) 一次 authorize 不必查兩次）。
+   * 省一次 permissionsFor（A2-5：同一組 (email, service) 一次 authorize 不必查兩次）。
    */
   perm?: PermissionEntry;
   /**
@@ -219,7 +219,7 @@ export async function verifySession(
 
 // 讀 auth 目前的登入態＋順便查一次 Subject（sessionsValidFrom 撤銷檢查要用）。
 // getSession 與 getSessionForAuthorize 共用這支，避免同一個 email 在同一次請求裡
-// 被 findSubjectByEmail 查兩次（A1-11）。
+// 被 findSubjectByEmail 查兩次（A2-5）。
 // Phase 3 補強：驗章成功後再比對 Subject.sessionsValidFrom——ban 時 panel 會把它設為 now()，
 // 早於這個時間簽出的 auth session 一律視同未登入（被 ban 者換不到任何新的 per-service 票）。
 // 只查 Subject 表（輕量、無 join），DB 掛掉 fail-open：查詢失敗不影響既有登入態。

@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
 
   // 重簽新 token（exp 貼著 auth 登入態自己的 exp，不超過它，見 A2-4）。
   // permissions／subject 都轉手塞給 signServiceToken：上面已經替同一組 (email, serviceId)
-  // 查過 perm，getSessionForAuthorize 也已經查過 Subject，不必再各自查一次（A1-11）。
+  // 查過 perm，getSessionForAuthorize 也已經查過 Subject，不必再各自查一次（A2-5）。
   const token = await signServiceToken(
     {
       sub: session.sub,

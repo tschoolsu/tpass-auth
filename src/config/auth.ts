@@ -63,7 +63,7 @@ const baseUrl = process.env.AUTH_BASE_URL!;
 {
   const baseUrlHost = new URL(baseUrl).hostname;
   const suffix = process.env.AUTH_ALLOWED_HOST_SUFFIX!;
-  const isLoopback = baseUrlHost === "localhost" || baseUrlHost === "127.0.0.1" || baseUrlHost === "::1";
+  const isLoopback = baseUrlHost === "localhost" || baseUrlHost === "127.0.0.1" || baseUrlHost === "[::1]";
   const isUnderSuffix = baseUrlHost === suffix || baseUrlHost.endsWith("." + suffix);
   if (!isLoopback && !isUnderSuffix) {
     throw new Error(

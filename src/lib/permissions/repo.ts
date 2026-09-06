@@ -18,6 +18,7 @@ export function findAllGrants(email: string): Promise<Grant[]> {
 
 // ── panel 用查詢（Phase 2）──────────────────────────────────────────────
 
+// authorize 熱路徑也用這支（session.ts 的 getSession / signServiceToken）。
 export function findSubjectByEmail(email: string): Promise<Subject | null> {
   return prisma.subject.findUnique({ where: { email: email.toLowerCase() } });
 }

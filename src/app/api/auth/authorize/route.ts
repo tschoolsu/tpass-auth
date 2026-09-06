@@ -7,6 +7,7 @@ import { authConfig } from "@/config/auth";
 import { isAllowedNext, isAllowedRedirect } from "@/lib/oauth";
 import { getSession, signServiceToken } from "@/lib/session";
 import { permissionsFor } from "@/lib/permissions/resolve";
+import { registry } from "@/lib/registry";
 
 export const runtime = "nodejs";
 
@@ -48,6 +49,14 @@ export async function GET(request: NextRequest) {
   }
   // callback 位址必須在生態系根網域白名單內（同 login 的 Open Redirect 防線）。
   if (!redirectUri || !isAllowedRedirect(redirectUri)) {
+    return reject("invalid-redirect");
+  }
+  // A1-4：光落在根網域底下不夠——redirect_uri 還必須是 service 自己的子網域，
+  // 否則 `?service=vote&redirect_uri=https://msg.<suffix>/x` 能把 aud=tpass:vote
+  // 的票用自動送出的 form POST 交到別的服務網域。子網域來自註冊表，不得硬編碼。
+  const service = registry.services.find((s) => s.id === serviceId);
+  const expectedHost = `${service?.subdomain}.${authConfig.allowedHostSuffix}`;
+  if (!service || new URL(redirectUri).hostname !== expectedHost) {
     return reject("invalid-redirect");
   }
   // next 只能是站內路徑（消費端 callback 會拿它做最後跳轉，不能被塞外部網址）。

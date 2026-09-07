@@ -101,7 +101,11 @@ async function verifyKeyPairMatches(): Promise<void> {
   }
 }
 
-function ensureKeyPairMatches(): Promise<void> {
+// export：instrumentation.ts 的 register() 也要呼叫這支，讓自檢在 server 開始處理
+// 任何請求前就做過一次（A2-1 殘留缺口——只在第一次簽章前做，deploy.sh 打 / 的健康
+// 檢查根本不會觸發簽章，貼錯金鑰的部署照樣過關）。快取共用同一顆 promise，
+// instrumentation 先觸發一次之後，第一次真正簽章時只是拿同一個已 resolve 的結果。
+export function ensureKeyPairMatches(): Promise<void> {
   keyPairCheckPromise ??= verifyKeyPairMatches();
   return keyPairCheckPromise;
 }

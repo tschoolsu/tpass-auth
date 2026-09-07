@@ -71,6 +71,41 @@ function getPublicKeys(): Promise<Map<string, CryptoKey>> {
 // 公鑰表也給 JWKS route 用。
 export { getPublicKeys };
 
+// A4-1：金鑰輪替時 JWT_PRIVATE_KEY／JWT_PUBLIC_KEY 只改一邊或貼錯，過去 auth 照常啟動、
+// 照常簽票，但簽出的 token 沒有任何公鑰驗得過——七個消費端同時全面登入失敗，auth 自己
+// 沒有任何錯誤訊號。用私鑰簽一段固定 payload、用 signingKid 對應的公鑰驗，驗不過就 throw
+// 明確錯誤，跟 config/auth.ts 的 AUTH_BASE_URL fail-fast 同一風格。
+// 私鑰／公鑰都是 lazy import（async，不能在 config 那樣的 module top-level 同步檢查），
+// 所以自檢也 lazy，但只在第一次簽章前做一次並快取結果——不要每次簽都重驗一次。
+let keyPairCheckPromise: Promise<void> | null = null;
+
+async function verifyKeyPairMatches(): Promise<void> {
+  const [privateKey, publicKeys] = await Promise.all([getPrivateKey(), getPublicKeys()]);
+  const publicKey = publicKeys.get(authConfig.jwt.signingKid);
+  if (!publicKey) {
+    throw new Error(
+      `[session] JWKS 公鑰清單找不到目前簽章用的 kid（${authConfig.jwt.signingKid}）`,
+    );
+  }
+  const probe = await new SignJWT({})
+    .setProtectedHeader({ alg: "EdDSA", kid: authConfig.jwt.signingKid })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  try {
+    await jwtVerify(probe, publicKey, { algorithms: ["EdDSA"] });
+  } catch {
+    throw new Error(
+      "[session] JWT_PRIVATE_KEY 與 JWT_PUBLIC_KEY 不是同一組金鑰對",
+    );
+  }
+}
+
+function ensureKeyPairMatches(): Promise<void> {
+  keyPairCheckPromise ??= verifyKeyPairMatches();
+  return keyPairCheckPromise;
+}
+
 // audience 命名慣例（契約 v2）：每個服務一個 aud=tpass:<serviceId>，token 只在該服務有效。
 export const serviceAudience = (serviceId: string) => `tpass:${serviceId}`;
 
@@ -91,6 +126,7 @@ async function sign(
   ttlSeconds: number,
   maxExp?: number,
 ): Promise<string> {
+  await ensureKeyPairMatches();
   const now = Math.floor(Date.now() / 1000);
   const exp = maxExp !== undefined ? Math.min(now + ttlSeconds, maxExp) : now + ttlSeconds;
   const privateKey = await getPrivateKey();
